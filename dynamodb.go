@@ -45,45 +45,50 @@ func NewDynamodbWrapper(table string, config aws.Config, readCapacity, writeCapa
 // TableExists determines whether a DynamoDB table exists.
 func (w *DynamodbWrapper) TableExists() (bool, error) {
 	exists := true
+
 	_, err := w.Client.DescribeTable(w.DdbCtx, &dynamodb.DescribeTableInput{TableName: aws.String(w.TableName)})
 	if err != nil {
 		exists = false
 	}
+
 	return exists, err
 }
 
 // ListTables lists the DynamoDB table names for the current account.
 func (w *DynamodbWrapper) ListTables() ([]string, error) {
 	var tableNames []string
+
 	tables, err := w.Client.ListTables(w.DdbCtx, &dynamodb.ListTablesInput{})
 	if err == nil {
 		tableNames = tables.TableNames
 	}
+
 	return tableNames, err
 }
 
-func (w *DynamodbWrapper) BuildTableInput(pk string, sk string, skType types.ScalarAttributeType) *dynamodb.CreateTableInput {
+func (w *DynamodbWrapper) BuildTableInput(primaryKey string, sortKey string, skType types.ScalarAttributeType) *dynamodb.CreateTableInput {
 	ads := []types.AttributeDefinition{{
-		AttributeName: aws.String(pk),
+		AttributeName: aws.String(primaryKey),
 		AttributeType: types.ScalarAttributeTypeS,
 	}}
 	kss := []types.KeySchemaElement{{
-		AttributeName: aws.String(pk),
+		AttributeName: aws.String(primaryKey),
 		KeyType:       types.KeyTypeHash,
 	}}
 
-	if sk != "" {
+	if sortKey != "" {
 		ads = append(ads, types.AttributeDefinition{
-			AttributeName: aws.String(sk),
+			AttributeName: aws.String(sortKey),
 			AttributeType: skType,
 		})
+
 		kss = append(kss, types.KeySchemaElement{
-			AttributeName: aws.String(sk),
+			AttributeName: aws.String(sortKey),
 			KeyType:       types.KeyTypeRange,
 		})
 	}
 
-	ti := &dynamodb.CreateTableInput{
+	input := &dynamodb.CreateTableInput{
 		AttributeDefinitions: ads,
 		KeySchema:            kss,
 		TableName:            aws.String(w.TableName),
@@ -92,32 +97,35 @@ func (w *DynamodbWrapper) BuildTableInput(pk string, sk string, skType types.Sca
 			WriteCapacityUnits: aws.Int64(int64(w.writeCapacity)),
 		},
 	}
-	return ti
+
+	return input
 }
 
-func (w *DynamodbWrapper) CreateTable(tableInput *dynamodb.CreateTableInput) (desc *types.TableDescription, err error) {
+func (w *DynamodbWrapper) CreateTable(tableInput *dynamodb.CreateTableInput) (*types.TableDescription, error) {
 	tableInput.TableName = aws.String(w.TableName)
-	tb, err := w.Client.CreateTable(
+
+	table, err := w.Client.CreateTable(
 		w.DdbCtx,
 		tableInput,
 	)
 	if err != nil {
-		return
+		return nil, err
 	}
 
+	longTo := 5
 	waiter := dynamodb.NewTableExistsWaiter(w.Client)
-	err = waiter.Wait(
+
+	if err := waiter.Wait(
 		w.DdbCtx,
 		&dynamodb.DescribeTableInput{
 			TableName: aws.String(w.TableName),
 		},
-		5*time.Minute,
-	)
-	if err != nil {
-		return
+		time.Duration(longTo)*time.Minute,
+	); err != nil {
+		return nil, err
 	}
 
-	return tb.TableDescription, err
+	return table.TableDescription, err
 }
 
 func (w *DynamodbWrapper) AddItem(data interface{}) error {
@@ -125,14 +133,17 @@ func (w *DynamodbWrapper) AddItem(data interface{}) error {
 	if err != nil {
 		panic(err)
 	}
+
 	_, err = w.Client.PutItem(w.DdbCtx, &dynamodb.PutItemInput{
 		TableName: aws.String(w.TableName), Item: item,
 	})
+
 	return err
 }
 
 func (w *DynamodbWrapper) AddItemBatch(data []types.WriteRequest) (int, error) {
 	var err error
+
 	written := 0
 	// DynamoDB allows a maximum batch size of 25 items.
 	batchSize := 25
@@ -141,6 +152,7 @@ func (w *DynamodbWrapper) AddItemBatch(data []types.WriteRequest) (int, error) {
 
 	for start < len(data) {
 		var wrArr []types.WriteRequest
+
 		if end > len(data) {
 			end = len(data)
 		}
@@ -152,9 +164,11 @@ func (w *DynamodbWrapper) AddItemBatch(data []types.WriteRequest) (int, error) {
 				RequestItems: map[string][]types.WriteRequest{w.TableName: wrArr},
 			},
 		)
+
 		if err == nil {
 			written += len(wrArr)
 		}
+
 		start = end
 		end += batchSize
 	}
@@ -164,13 +178,16 @@ func (w *DynamodbWrapper) AddItemBatch(data []types.WriteRequest) (int, error) {
 
 func (w *DynamodbWrapper) BuildAttrValueMap(keys []string, values []interface{}) (map[string]types.AttributeValue, error) {
 	mapped := make(map[string]types.AttributeValue)
+
 	for i, key := range keys {
 		v, err := attributevalue.Marshal(values[i])
 		if err != nil {
 			return nil, err
 		}
+
 		mapped[key] = v
 	}
+
 	return mapped, nil
 }
 
@@ -179,22 +196,19 @@ func (w *DynamodbWrapper) Retrieve(key map[string]types.AttributeValue, out inte
 		Key:       key,
 		TableName: aws.String(w.TableName),
 	})
-
 	if err != nil {
 		return err
 	}
 
-	err = attributevalue.UnmarshalMap(resp.Item, out)
-	return err
+	return attributevalue.UnmarshalMap(resp.Item, out)
 }
 
-func (w *DynamodbWrapper) BuildQueryExpr(name string, key interface{}) (expr expression.Expression, err error) {
+func (w *DynamodbWrapper) BuildQueryExpr(name string, key interface{}) (expression.Expression, error) {
 	keyEx := expression.Key(name).Equal(expression.Value(key))
-	expr, err = expression.NewBuilder().WithKeyCondition(keyEx).Build()
-	return expr, err
+	return expression.NewBuilder().WithKeyCondition(keyEx).Build()
 }
 
-func (w *DynamodbWrapper) Query(expr expression.Expression, out interface{}) (err error) {
+func (w *DynamodbWrapper) Query(expr expression.Expression, out interface{}) error {
 	resp, err := w.Client.Query(
 		w.DdbCtx,
 		&dynamodb.QueryInput{
@@ -204,19 +218,17 @@ func (w *DynamodbWrapper) Query(expr expression.Expression, out interface{}) (er
 			KeyConditionExpression:    expr.KeyCondition(),
 		},
 	)
-
 	if err != nil {
-		return
+		return err
 	}
 
-	err = attributevalue.UnmarshalListOfMaps(resp.Items, out)
-	return err
+	return attributevalue.UnmarshalListOfMaps(resp.Items, out)
 }
 
 func (w *DynamodbWrapper) BuildScanExpr() {
 }
 
-func (w *DynamodbWrapper) Scan(expr expression.Expression, out interface{}) (err error) {
+func (w *DynamodbWrapper) Scan(expr expression.Expression, out interface{}) error {
 	resp, err := w.Client.Scan(
 		w.DdbCtx,
 		&dynamodb.ScanInput{
@@ -228,7 +240,7 @@ func (w *DynamodbWrapper) Scan(expr expression.Expression, out interface{}) (err
 		},
 	)
 	if err != nil {
-		return
+		return err
 	}
 
 	return attributevalue.UnmarshalListOfMaps(resp.Items, out)
@@ -253,5 +265,6 @@ func (w *DynamodbWrapper) DeleteTable() error {
 			TableName: aws.String(w.TableName),
 		},
 	)
+
 	return err
 }

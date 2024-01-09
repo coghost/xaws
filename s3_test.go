@@ -11,6 +11,9 @@ import (
 	"github.com/ungerik/go-dry"
 )
 
+// const bucketName = "a-unique-bucket-name"
+const bucketName = "nebu-programmatic-data"
+
 type S3Suite struct {
 	suite.Suite
 	w *S3Wrapper
@@ -21,13 +24,9 @@ func TestS3(t *testing.T) {
 }
 
 func (s *S3Suite) SetupSuite() {
-	lines, e := dry.FileGetLines("/tmp/aws.s3.cfg")
-	if e != nil {
-		panic(e)
-	}
-	ak, sk, region, name := lines[0], lines[1], lines[2], lines[3]
-	cfg, _ := NewAwsConfig(ak, sk, region)
-	s.w = NewS3Wrapper(name, cfg, 60)
+	var err error
+	s.w, err = NewS3WrapperWithDefaultConfig(bucketName)
+	s.Nil(err)
 }
 
 func (s *S3Suite) TearDownSuite() {
@@ -104,4 +103,20 @@ func (s *S3Suite) Test02Upload() {
 			})
 		}
 	}
+}
+
+func (s *S3Suite) Test_0301_uploadRaw() {
+	data := `
+	### what to do
+	- test 0301
+	- test 0302
+	`
+	err := s.w.UploadRawDataToGz(data, "plain/p2g.gz")
+	s.Nil(err)
+}
+
+func (s *S3Suite) Test_0302_download() {
+	// err := s.w.DownloadTo("plain/abc.txt.gz", "/tmp/a/b/c/d")
+	// s.Nil(err)
+	// pp.Println(randSeq(10))
 }
