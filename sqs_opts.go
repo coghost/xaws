@@ -4,6 +4,8 @@ type SqsOpts struct {
 	batch int
 	max   int
 
+	queueName string
+
 	receiveTimeSeconds int
 }
 
@@ -30,5 +32,11 @@ func WithMax(i int) SqsOptFunc {
 func WithBatch(i int) SqsOptFunc {
 	return func(o *SqsOpts) {
 		o.batch = i
+	}
+}
+
+func WithQueueName(s string) SqsOptFunc {
+	return func(o *SqsOpts) {
+		o.queueName = s
 	}
 }

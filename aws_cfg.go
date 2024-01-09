@@ -10,7 +10,7 @@ import (
 
 func NewAwsConfig(ak, sk, region string) (aws.Config, error) {
 	ctx := context.TODO()
-	cp := credentials.StaticCredentialsProvider{
+	prov := credentials.StaticCredentialsProvider{
 		Value: aws.Credentials{
 			AccessKeyID:     ak,
 			SecretAccessKey: sk,
@@ -19,7 +19,17 @@ func NewAwsConfig(ak, sk, region string) (aws.Config, error) {
 	cfg, err := config.LoadDefaultConfig(
 		ctx,
 		config.WithRegion(region),
-		config.WithCredentialsProvider(cp),
+		config.WithCredentialsProvider(prov),
 	)
+
 	return cfg, err
+}
+
+func MustNewDefaultConfig() aws.Config {
+	cfg, err := config.LoadDefaultConfig(context.TODO())
+	if err != nil {
+		panic(err)
+	}
+
+	return cfg
 }

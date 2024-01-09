@@ -2,16 +2,16 @@ package xaws
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/avast/retry-go"
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/aws/aws-sdk-go-v2/service/sqs/types"
 	"github.com/coghost/xpretty"
-	"github.com/coghost/xutil"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cast"
 )
@@ -27,8 +27,6 @@ const (
 	Q_PRODUCER Roles = "cr"  // cr
 	Q_CONSUMER Roles = "rd"  // rd
 )
-
-var ErrRoleViolation = errors.New("role violation: current role is not allowed to perform this operation")
 
 type SqsWrapper struct {
 	Config aws.Config
@@ -47,7 +45,7 @@ type SqsWrapper struct {
 }
 
 func NewSqsWrapper(queue string, cfg aws.Config, batchSize int, timeout int) *SqsWrapper {
-	sw := &SqsWrapper{
+	wrapper := &SqsWrapper{
 		Config:    cfg,
 		Client:    sqs.NewFromConfig(cfg),
 		awsCtx:    context.TODO(),
@@ -56,21 +54,31 @@ func NewSqsWrapper(queue string, cfg aws.Config, batchSize int, timeout int) *Sq
 		// timeout
 		Timeout: timeout,
 	}
-	sw.SetQueueUrl(sw.QueueName)
-	xpretty.DummyLog("connected to queue:", sw.QueueName)
-	return sw
+	wrapper.SetQueueUrl(wrapper.QueueName)
+	xpretty.DummyLog("connected to queue:", wrapper.QueueName)
+	return wrapper
+}
+
+func NewSqsWrapperWithDefaultConfig(queue string, batchSize int) (*SqsWrapper, error) {
+	cfg, err := config.LoadDefaultConfig(context.TODO())
+	if err != nil {
+		return nil, err
+	}
+
+	return NewSqsWrapper(queue, cfg, batchSize, _defaultTimeoutSecs), nil
 }
 
 func (w *SqsWrapper) SetQueueUrl(name string) {
 	if name == "" {
 		return
 	}
+
 	w.QueueName = name
 	w.QueueUrl, _ = w.GetQueueUrl(w.QueueName)
 }
 
 func (w *SqsWrapper) CreateQueue(name string) (string, error) {
-	r, e := w.Client.CreateQueue(w.awsCtx, &sqs.CreateQueueInput{
+	output, e := w.Client.CreateQueue(w.awsCtx, &sqs.CreateQueueInput{
 		QueueName: &name,
 		Attributes: map[string]string{
 			"DelaySeconds":           "0",
@@ -79,13 +87,14 @@ func (w *SqsWrapper) CreateQueue(name string) (string, error) {
 	})
 
 	w.SetQueueUrl(name)
-	return *r.QueueUrl, e
+
+	return *output.QueueUrl, e
 }
 
 func (w *SqsWrapper) DeleteQueue(name string) error {
 	url := w.MustGetQueueUrl(name)
 	if url != w.QueueUrl {
-		return fmt.Errorf("name passed in (%s) is not same with set in init (%s)", name, w.QueueName)
+		return QueueNameNotMatchError(fmt.Sprintf("name passed in (%s) is not same with set in init (%s)", name, w.QueueName))
 	}
 
 	_, e := w.Client.DeleteQueue(
@@ -94,6 +103,7 @@ func (w *SqsWrapper) DeleteQueue(name string) error {
 			QueueUrl: &url,
 		},
 	)
+
 	return e
 }
 
@@ -115,7 +125,7 @@ func (w *SqsWrapper) GetQueues() (*sqs.ListQueuesOutput, error) {
 func (w *SqsWrapper) GetQueueUrl(name string) (string, error) {
 	res, err := w.Client.GetQueueUrl(w.awsCtx, &sqs.GetQueueUrlInput{QueueName: &name})
 	if err == nil {
-		return *res.QueueUrl, err
+		return *res.QueueUrl, nil
 	}
 
 	return "", err
@@ -126,28 +136,30 @@ func (w *SqsWrapper) MustGetQueueUrl(name string) string {
 	if e != nil {
 		panic(e)
 	}
+
 	return r
 }
 
-func (w *SqsWrapper) SendMsg(message string) (r *sqs.SendMessageOutput, err error) {
-	var cancelFn func()
-	ctx := context.Background()
-	ctx, cancelFn = context.WithTimeout(ctx, time.Duration(w.Timeout)*time.Second)
+func (w *SqsWrapper) SendMsg(message string) (*sqs.SendMessageOutput, error) {
+	// var cancelFn func()
+	// ctx := context.Background()
+	ctx, cancelFn := context.WithTimeout(context.Background(), time.Duration(w.Timeout)*time.Second)
 	if cancelFn != nil {
 		defer cancelFn()
 	}
 
-	r, err = w.Client.SendMessage(
+	r, err := w.Client.SendMessage(
 		ctx,
 		&sqs.SendMessageInput{
 			MessageBody: aws.String(message),
 			QueueUrl:    &w.QueueUrl,
 		},
 	)
+
 	return r, err
 }
 
-func (w *SqsWrapper) MustSendMsg(message string) (r *sqs.SendMessageOutput) {
+func (w *SqsWrapper) MustSendMsg(message string) *sqs.SendMessageOutput {
 	if r, err := w.SendMsg(message); err != nil {
 		panic(err)
 	} else {
@@ -155,28 +167,29 @@ func (w *SqsWrapper) MustSendMsg(message string) (r *sqs.SendMessageOutput) {
 	}
 }
 
-func (w *SqsWrapper) MustSendMsgByRetry(message string, retries int) (r *sqs.SendMessageOutput) {
-	_, err := xutil.EnsureByRetry(
+func (w *SqsWrapper) MustSendMsgByRetry(message string, retries uint) *sqs.SendMessageOutput {
+	var output *sqs.SendMessageOutput
+
+	err := retry.Do(
 		func() error {
 			var e error
-			r, e = w.SendMsg(message)
+			output, e = w.SendMsg(message)
 			return e
 		},
-		retries,
+		retry.Attempts(_retryTimes),
 	)
+	panicIfErr(err)
 
-	if err != nil {
-		panic(err)
-	}
-	return r
+	return output
 }
 
-func (w *SqsWrapper) SendMsgBatch(messages []string) (r *sqs.SendMessageBatchOutput, err error) {
+func (w *SqsWrapper) SendMsgBatch(messages []string) (*sqs.SendMessageBatchOutput, error) {
 	if len(messages) == 0 {
-		return nil, err
+		return nil, ErrMessgeEmpty
 	}
 
 	var entries []types.SendMessageBatchRequestEntry
+
 	for i, message := range messages {
 		et := types.SendMessageBatchRequestEntry{
 			Id:          aws.String(fmt.Sprintf("%d", i+1)),
@@ -185,7 +198,7 @@ func (w *SqsWrapper) SendMsgBatch(messages []string) (r *sqs.SendMessageBatchOut
 		entries = append(entries, et)
 	}
 
-	r, err = w.Client.SendMessageBatch(
+	r, err := w.Client.SendMessageBatch(
 		w.awsCtx,
 		&sqs.SendMessageBatchInput{
 			Entries:  entries,
@@ -197,6 +210,7 @@ func (w *SqsWrapper) SendMsgBatch(messages []string) (r *sqs.SendMessageBatchOut
 
 func (w *SqsWrapper) chunkSlice(slice []string, chunkSize int) [][]string {
 	var chunks [][]string
+
 	for {
 		if len(slice) == 0 {
 			break
@@ -214,21 +228,22 @@ func (w *SqsWrapper) chunkSlice(slice []string, chunkSize int) [][]string {
 	return chunks
 }
 
-func (w *SqsWrapper) GetMsgs(opts ...SqsOptFunc) (r *sqs.ReceiveMessageOutput, err error) {
-	opt := SqsOpts{max: 1, receiveTimeSeconds: 2, batch: w.BatchSize}
+func (w *SqsWrapper) GetMsgs(opts ...SqsOptFunc) (*sqs.ReceiveMessageOutput, error) {
+	shortTo := 2
+
+	opt := SqsOpts{max: 1, receiveTimeSeconds: shortTo, batch: w.BatchSize}
 	bindSqsOpts(&opt, opts...)
 
-	r, err = w.Client.ReceiveMessage(
+	return w.Client.ReceiveMessage(
 		w.awsCtx,
 		&sqs.ReceiveMessageInput{
 			QueueUrl:            &w.QueueUrl,
 			MaxNumberOfMessages: int32(opt.batch),
 			WaitTimeSeconds:     int32(opt.receiveTimeSeconds),
 		})
-	return
 }
 
-func (w *SqsWrapper) GetMsg() (r *sqs.ReceiveMessageOutput, err error) {
+func (w *SqsWrapper) GetMsg() (*sqs.ReceiveMessageOutput, error) {
 	return w.GetMsgs(WithBatch(1))
 }
 
@@ -246,10 +261,17 @@ func (w *SqsWrapper) MustGetMsgs(opts ...SqsOptFunc) []*string {
 	return arr
 }
 
-func (w *SqsWrapper) MustGetMsg() *string {
-	r, e := w.GetMsg()
-	xutil.PanicIfErr(e)
-	return r.Messages[0].Body
+func (w *SqsWrapper) MustGetMsg() *types.Message {
+	output, err := w.GetMsg()
+	if err != nil {
+		log.Fatal().Err(err).Msg("cannot get message")
+	}
+
+	if len(output.Messages) == 0 {
+		return nil
+	}
+
+	return &output.Messages[0]
 }
 
 const (
@@ -272,7 +294,7 @@ func (w *SqsWrapper) GoReadMessages(ch chan *SqsResp, opts ...SqsOptFunc) {
 	go w.ReadMessages(ch, opts...)
 }
 
-func (w *SqsWrapper) ReadMessages(ch chan *SqsResp, opts ...SqsOptFunc) {
+func (w *SqsWrapper) ReadMessages(chanResp chan *SqsResp, opts ...SqsOptFunc) {
 	opt := SqsOpts{max: 0}
 	bindSqsOpts(&opt, opts...)
 
@@ -284,45 +306,45 @@ OUTER:
 		remained, err := w.GetRemainedItems()
 		log.Debug().Err(err).Int64("remain", remained).Msg("remained messages")
 		if err != nil {
-			ch <- failed
+			chanResp <- failed
 		}
 
 		if remained == 0 {
-			ch <- NewSqsResp(nil, READ_SQS_ALL)
+			chanResp <- NewSqsResp(nil, READ_SQS_ALL)
 			break
 		}
 
 		msgs, err := w.GetMsgs()
 		if err != nil {
-			ch <- failed
+			chanResp <- failed
 		}
 
 		for _, msg := range msgs.Messages {
-			ch <- NewSqsResp(msg.Body, READ_SQS_OK)
+			chanResp <- NewSqsResp(msg.Body, READ_SQS_OK)
 			got += 1
 			if opt.max != 0 && got >= opt.max {
-				ch <- NewSqsResp(nil, READ_SQS_MAXIMUM)
+				chanResp <- NewSqsResp(nil, READ_SQS_MAXIMUM)
 				break OUTER
 			}
 		}
 	}
 }
 
-func (w *SqsWrapper) DeleteMsg(handle *string) (r *sqs.DeleteMessageOutput, err error) {
-	r, err = w.Client.DeleteMessage(
+func (w *SqsWrapper) DeleteMsg(handle *string) (*sqs.DeleteMessageOutput, error) {
+	return w.Client.DeleteMessage(
 		w.awsCtx,
 		&sqs.DeleteMessageInput{
 			QueueUrl:      &w.QueueUrl,
 			ReceiptHandle: handle,
 		})
-	return
 }
 
-func (w *SqsWrapper) MustDeleteMsg(handle *string) (r *sqs.DeleteMessageOutput) {
+func (w *SqsWrapper) MustDeleteMsg(handle *string) *sqs.DeleteMessageOutput {
 	r, err := w.DeleteMsg(handle)
 	if err != nil {
 		panic(err)
 	}
+
 	return r
 }
 
@@ -330,16 +352,27 @@ func (w *SqsWrapper) CheckRole(least Roles) error {
 	if !strings.Contains(string(w.Role), string(least)) {
 		return ErrRoleViolation
 	}
+
 	return nil
 }
 
-func (w *SqsWrapper) GetRemainedItems() (int64, error) {
+func (w *SqsWrapper) GetRemainedItems(opts ...SqsOptFunc) (int64, error) {
+	opt := &SqsOpts{}
+	bindSqsOpts(opt, opts...)
+
+	qurl := w.QueueUrl
+	if opt.queueName != "" {
+		qurl = w.MustGetQueueUrl(opt.queueName)
+	}
+
 	attr := types.QueueAttributeNameApproximateNumberOfMessages
 	op, err := w.Client.GetQueueAttributes(w.awsCtx,
 		&sqs.GetQueueAttributesInput{
-			QueueUrl:       &w.QueueUrl,
-			AttributeNames: []types.QueueAttributeName{attr}},
+			QueueUrl:       &qurl,
+			AttributeNames: []types.QueueAttributeName{attr},
+		},
 	)
 	n := cast.ToInt64(op.Attributes[string(attr)])
+
 	return n, err
 }
