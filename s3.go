@@ -371,11 +371,13 @@ func (w *S3Wrapper) ListObjects(prefix string, opts ...S3OptionFunc) ([]string, 
 		emptyFileSize   int64 = 0
 	)
 
+	maxKeysIn := int32(opt.maxKeys)
+
 	for {
 		resp, err := w.Client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
 			Bucket:  aws.String(w.Bucket),
 			Prefix:  aws.String(prefix),
-			MaxKeys: int32(opt.maxKeys),
+			MaxKeys: aws.Int32(maxKeysIn),
 			// pagination
 			ContinuationToken: nextToken,
 		})
@@ -387,12 +389,12 @@ func (w *S3Wrapper) ListObjects(prefix string, opts ...S3OptionFunc) ([]string, 
 			name := *item.Key
 			isGz := fsutil.Suffix(name) == _dotgz
 
-			if !opt.withEmptyFile && isGz && item.Size <= emptyGzFileSize {
+			if !opt.withEmptyFile && isGz && *item.Size <= emptyGzFileSize {
 				// this is just a rough detection
 				continue
 			}
 
-			if !opt.withEmptyFile && item.Size == emptyFileSize {
+			if !opt.withEmptyFile && *item.Size == emptyFileSize {
 				continue
 			}
 
@@ -402,7 +404,7 @@ func (w *S3Wrapper) ListObjects(prefix string, opts ...S3OptionFunc) ([]string, 
 			}
 		}
 
-		if !resp.IsTruncated {
+		if !*resp.IsTruncated {
 			break
 		}
 
