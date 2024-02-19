@@ -174,6 +174,7 @@ func (w *SqsWrapper) MustSendMsgByRetry(message string, retries uint) *sqs.SendM
 		func() error {
 			var e error
 			output, e = w.SendMsg(message)
+
 			return e
 		},
 		retry.Attempts(_retryTimes),

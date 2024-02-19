@@ -46,6 +46,9 @@ func WithTimeout(n int) S3OptionFunc {
 	}
 }
 
+// Deprecated: WithSaveTo
+//
+//	saveTo is disabled in xaws, so no need to pass it.
 func WithSaveTo(s string) S3OptionFunc {
 	return func(o *S3Options) {
 		o.saveTo = s

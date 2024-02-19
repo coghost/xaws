@@ -84,7 +84,7 @@ func (w *S3Wrapper) ListBuckets() (*s3.ListBucketsOutput, error) {
 	return client.ListBuckets(context.TODO(), nil)
 }
 
-func (w *S3Wrapper) UploadToBucket(localFile, bucket, s3path string) (*manager.UploadOutput, error) {
+func (w *S3Wrapper) UploadToBucketWithAutoGzipped(localFile, s3path, bucket string) (*manager.UploadOutput, error) {
 	// var cancelFn func()
 	// ctx := context.Background()
 	ctx, cancelFn := context.WithTimeout(context.Background(), time.Duration(w.Timeout)*time.Second)
@@ -126,14 +126,14 @@ func (w *S3Wrapper) UploadToBucket(localFile, bucket, s3path string) (*manager.U
 	return r, err
 }
 
-func (w *S3Wrapper) Upload(localFile, s3path string) (*manager.UploadOutput, error) {
-	return w.UploadToBucket(localFile, w.Bucket, s3path)
+func (w *S3Wrapper) UploadWithAutoGzipped(localFile, s3path string) (*manager.UploadOutput, error) {
+	return w.UploadToBucketWithAutoGzipped(localFile, s3path, w.Bucket)
 }
 
-func (w *S3Wrapper) MustUpload(localFile, s3path string) {
+func (w *S3Wrapper) MustUploadWithAutoGzipped(localFile, s3path string) {
 	err := retry.Do(
 		func() error {
-			_, e := w.Upload(localFile, s3path)
+			_, e := w.UploadWithAutoGzipped(localFile, s3path)
 			return e
 		},
 		retry.Attempts(_retryTimes),
@@ -142,31 +142,56 @@ func (w *S3Wrapper) MustUpload(localFile, s3path string) {
 	panicIfErr(err)
 }
 
-// DownloadFile gets an object from a bucket and stores it in a local file.
-func (w *S3Wrapper) DownloadFile(objectKey string, fileName string) error {
+func (w *S3Wrapper) GetObjectContent(objectKey string) ([]byte, error) {
 	result, err := w.Client.GetObject(context.TODO(), &s3.GetObjectInput{
 		Bucket: aws.String(w.Bucket),
 		Key:    aws.String(objectKey),
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer result.Body.Close()
+
+	return io.ReadAll(result.Body)
+}
+
+// Deprecated: please use get object in the future
+//
+//	@receiver w
+//	@param objectKey
+//	@param fileName
+//	@return error
+func (w *S3Wrapper) DownloadFile(objectKey string, fileName string) error {
+	body, err := w.GetObjectContent(objectKey)
+	if err != nil {
+		return err
+	}
 
 	file, err := os.Create(fileName)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
+	_, err = file.Write(body)
 
-	if body, err := io.ReadAll(result.Body); err != nil {
-		return err
-	} else {
-		_, err = file.Write(body)
-		return err
-	}
+	return err
 }
 
+func (w *S3Wrapper) GetObject(objectKey string) ([]byte, error) {
+	b, err := w.HasObject(objectKey)
+	if err != nil {
+		log.Error().Err(err).Msg("got error when check file exist status")
+		return nil, err
+	}
+
+	if !b {
+		return nil, nil
+	}
+
+	return w.GetObjectContent(objectKey)
+}
+
+// Deprecated: please use get object in the future
 // Download downloads objectKey to default folder(w.SaveTo) with same name
 //   - if file existed, directly return the filename
 //
@@ -214,7 +239,7 @@ func (w *S3Wrapper) Download(objectKey string, opts ...S3OptionFunc) string {
 	return dst
 }
 
-func (w *S3Wrapper) IsExisted(objectKey string) (bool, error) {
+func (w *S3Wrapper) HasObject(objectKey string) (bool, error) {
 	_, err := w.Client.HeadObject(context.TODO(), &s3.HeadObjectInput{
 		Bucket: aws.String(w.Bucket),
 		Key:    aws.String(objectKey),
@@ -262,20 +287,22 @@ func (w *S3Wrapper) UploadLargeObject(bucketName string, objectKey string, large
 }
 
 // UploadRawData uploads and save raw data to s3 object key(no encoding:gzip supported).
-func (w *S3Wrapper) MustUploadRawData(raw string, objectKey string, opts ...S3OptionFunc) {
-	err := w.UploadRawData(raw, objectKey, opts...)
+func (w *S3Wrapper) MustUploadRawData(objectKey string, raw []byte, opts ...S3OptionFunc) {
+	err := w.UploadRawData(objectKey, raw, opts...)
 	if err != nil {
 		log.Fatal().Err(err).Msg("cannot upload raw data")
 	}
 }
 
-func (w *S3Wrapper) UploadRawData(raw, objectKey string, opts ...S3OptionFunc) error {
+func (w *S3Wrapper) PutObject(objectKey string, raw []byte, opts ...S3OptionFunc) error {
+	return w.UploadRawData(objectKey, raw, opts...)
+}
+
+func (w *S3Wrapper) UploadRawData(objectKey string, raw []byte, opts ...S3OptionFunc) error {
 	opt := &S3Options{bucket: w.Bucket, withGz: true}
 	bindS3Options(opt, opts...)
 
 	if opt.withGz {
-		raw = MustGzipStrToStr(raw)
-
 		if fsutil.Suffix(objectKey) != _dotgz {
 			objectKey += _dotgz
 		}
@@ -286,7 +313,7 @@ func (w *S3Wrapper) UploadRawData(raw, objectKey string, opts ...S3OptionFunc) e
 	_, err := ul.Upload(context.TODO(), &s3.PutObjectInput{
 		Bucket: aws.String(opt.bucket),
 		Key:    aws.String(objectKey),
-		Body:   strings.NewReader(raw),
+		Body:   bytes.NewReader(raw),
 	})
 
 	return err
@@ -303,7 +330,7 @@ func (w *S3Wrapper) UploadRawDataToGz(raw string, objectKey string) error {
 	fsutil.MustSave(name, raw)
 	// defer os.Remove(name)
 
-	_, err := w.Upload(name, objectKey)
+	_, err := w.UploadWithAutoGzipped(name, objectKey)
 
 	return err
 }
@@ -317,39 +344,6 @@ func randSeq(n int) string {
 	}
 
 	return string(b)
-}
-
-func MustGzipStrToStr(raw string) string {
-	bt := MustGzipStr(raw)
-	return string(bt)
-}
-
-func MustGzipStr(raw string) []byte {
-	v, err := GzipStr(raw)
-	if err != nil {
-		log.Fatal().Err(err).Msg("cannot convert to gzip buffer")
-	}
-
-	return v.Bytes()
-}
-
-func GzipStr(raw string) (*bytes.Buffer, error) {
-	var buf bytes.Buffer
-
-	gzwr, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
-	if err != nil {
-		return nil, err
-	}
-
-	if _, err := gzwr.Write([]byte(raw)); err != nil {
-		return nil, err
-	}
-
-	if err := gzwr.Close(); err != nil {
-		return nil, err
-	}
-
-	return &buf, nil
 }
 
 // ListObjects list all available objects in bucket with prefix.
@@ -371,16 +365,21 @@ func (w *S3Wrapper) ListObjects(prefix string, opts ...S3OptionFunc) ([]string, 
 		emptyFileSize   int64 = 0
 	)
 
-	maxKeysIn := int32(opt.maxKeys)
-
 	for {
-		resp, err := w.Client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
-			Bucket:  aws.String(w.Bucket),
-			Prefix:  aws.String(prefix),
-			MaxKeys: aws.Int32(maxKeysIn),
+		input := &s3.ListObjectsV2Input{
+			Bucket: aws.String(w.Bucket),
+			Prefix: aws.String(prefix),
+			// MaxKeys: aws.Int32(maxKeysIn),
 			// pagination
 			ContinuationToken: nextToken,
-		})
+		}
+
+		if opt.maxKeys != 0 {
+			maxKeysIn := int32(opt.maxKeys)
+			input.MaxKeys = &maxKeysIn
+		}
+
+		resp, err := w.Client.ListObjectsV2(context.TODO(), input)
 		if err != nil {
 			return found, err
 		}
@@ -405,6 +404,11 @@ func (w *S3Wrapper) ListObjects(prefix string, opts ...S3OptionFunc) ([]string, 
 		}
 
 		if !*resp.IsTruncated {
+			break
+		}
+
+		if opt.maxKeys != 0 && len(found) > opt.maxKeys {
+			found = found[:opt.maxKeys]
 			break
 		}
 

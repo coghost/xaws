@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
@@ -40,6 +41,19 @@ func NewDynamodbWrapper(table string, config aws.Config, readCapacity, writeCapa
 		readCapacity:  readCapacity,
 		writeCapacity: writeCapacity,
 	}
+}
+
+func NewDynamodbWrapperWithDefault(table string) (*DynamodbWrapper, error) {
+	cfg, err := config.LoadDefaultConfig(context.TODO())
+	if err != nil {
+		return nil, err
+	}
+
+	const (
+		dftCap = 5 // value when create a table with default settings.
+	)
+
+	return NewDynamodbWrapper(table, cfg, dftCap, dftCap), nil
 }
 
 // TableExists determines whether a DynamoDB table exists.
@@ -128,7 +142,7 @@ func (w *DynamodbWrapper) CreateTable(tableInput *dynamodb.CreateTableInput) (*t
 	return table.TableDescription, err
 }
 
-func (w *DynamodbWrapper) AddItem(data interface{}) error {
+func (w *DynamodbWrapper) PutItem(data interface{}) error {
 	item, err := attributevalue.MarshalMap(data)
 	if err != nil {
 		panic(err)
@@ -146,7 +160,7 @@ func (w *DynamodbWrapper) AddItemBatch(data []types.WriteRequest) (int, error) {
 
 	written := 0
 	// DynamoDB allows a maximum batch size of 25 items.
-	batchSize := 25
+	batchSize := 10
 	start := 0
 	end := start + batchSize
 
@@ -164,6 +178,10 @@ func (w *DynamodbWrapper) AddItemBatch(data []types.WriteRequest) (int, error) {
 				RequestItems: map[string][]types.WriteRequest{w.TableName: wrArr},
 			},
 		)
+
+		if err != nil {
+			return 0, err
+		}
 
 		if err == nil {
 			written += len(wrArr)
@@ -191,7 +209,7 @@ func (w *DynamodbWrapper) BuildAttrValueMap(keys []string, values []interface{})
 	return mapped, nil
 }
 
-func (w *DynamodbWrapper) Retrieve(key map[string]types.AttributeValue, out interface{}) error {
+func (w *DynamodbWrapper) GetItem(key map[string]types.AttributeValue, out interface{}) error {
 	resp, err := w.Client.GetItem(w.DdbCtx, &dynamodb.GetItemInput{
 		Key:       key,
 		TableName: aws.String(w.TableName),
@@ -205,6 +223,11 @@ func (w *DynamodbWrapper) Retrieve(key map[string]types.AttributeValue, out inte
 
 func (w *DynamodbWrapper) BuildQueryExpr(name string, key interface{}) (expression.Expression, error) {
 	keyEx := expression.Key(name).Equal(expression.Value(key))
+	return expression.NewBuilder().WithKeyCondition(keyEx).Build()
+}
+
+func (w *DynamodbWrapper) BuildQueryBeginsWith(name string, key string) (expression.Expression, error) {
+	keyEx := expression.Key(name).BeginsWith(key)
 	return expression.NewBuilder().WithKeyCondition(keyEx).Build()
 }
 

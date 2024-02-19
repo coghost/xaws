@@ -185,6 +185,7 @@ func (w *FunctionWrapper) Create(functionName string, handlerName string, iamRol
 		funcOutput, err := waiter.WaitForOutput(context.TODO(), &lambda.GetFunctionInput{
 			FunctionName: aws.String(functionName),
 		}, 1*time.Minute)
+
 		if err != nil {
 			log.Fatal().Msgf("Couldn't wait for function %v to be active. Here's why: %v\n", functionName, err)
 		} else {

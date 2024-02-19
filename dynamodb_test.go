@@ -92,7 +92,7 @@ var tests = []Movie{
 
 func (s *DyanmodbWrapperSuite) Test_03_addRow() {
 	for _, tt := range tests {
-		err := s.w.AddItem(tt)
+		err := s.w.PutItem(tt)
 		s.Nil(err)
 	}
 }
@@ -102,7 +102,7 @@ func (s *DyanmodbWrapperSuite) Test_04_getRow() {
 		var out Movie
 		key, e := s.w.BuildAttrValueMap([]string{"year", "title"}, []interface{}{tt.Year, tt.Title})
 		s.Nil(e)
-		err := s.w.Retrieve(key, &out)
+		err := s.w.GetItem(key, &out)
 		s.Nil(err)
 		pp.Println(out)
 	}
@@ -142,7 +142,7 @@ func (s *DyanmodbWrapperSuite) Test_07_delete() {
 		var out Movie
 		key, e := s.w.BuildAttrValueMap([]string{"year", "title"}, []interface{}{tt.Year, tt.Title})
 		s.Nil(e)
-		err := s.w.Retrieve(key, &out)
+		err := s.w.GetItem(key, &out)
 		s.Nil(err)
 		pp.Println(out)
 	}

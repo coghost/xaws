@@ -43,13 +43,11 @@ func (w *EventWrapper) ListRules() []types.Rule {
 
 // PutRule put a rule.
 func (w *EventWrapper) PutRule(name string, schedule string) error {
-	// roleArn := "arn:aws:iam::722688396086:role/service-role/Amazon_EventBridge_Scheduler_LAMBDA_invoke"
 	_, err := w.client.PutRule(context.TODO(), &eventbridge.PutRuleInput{
 		Name:               aws.String(name),
 		Description:        aws.String(fmt.Sprintf("trigger %s", name)),
 		ScheduleExpression: aws.String(schedule),
 		State:              types.RuleStateEnabled,
-		// RoleArn:            aws.String(roleArn),
 	})
 
 	return err
