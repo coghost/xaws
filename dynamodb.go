@@ -183,10 +183,7 @@ func (w *DynamodbWrapper) AddItemBatch(data []types.WriteRequest) (int, error) {
 			return 0, err
 		}
 
-		if err == nil {
-			written += len(wrArr)
-		}
-
+		written += len(wrArr)
 		start = end
 		end += batchSize
 	}

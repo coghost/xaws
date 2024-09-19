@@ -1,9 +1,9 @@
 package xaws
 
 import (
+	"encoding/json"
 	"testing"
 
-	"github.com/coghost/xutil"
 	"github.com/k0kubun/pp/v3"
 	"github.com/stretchr/testify/suite"
 )
@@ -27,7 +27,8 @@ func (s *SecretSuite) Test_01() {
 	pp.Println(str)
 
 	auth := &Auth{}
-	xutil.MustStructify(str, &auth)
+	err := json.Unmarshal([]byte(str), &auth)
+	s.Nil(err)
 
 	pp.Println(auth)
 }

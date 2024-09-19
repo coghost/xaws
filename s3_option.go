@@ -8,7 +8,9 @@ type S3Options struct {
 	savedName   string
 
 	bucket string
-	withGz bool
+
+	withGz     bool
+	autoUnGzip bool
 
 	withEmptyFile bool
 	maxKeys       int
@@ -71,5 +73,11 @@ func WithFolderLevel(n int) S3OptionFunc {
 func WithSavedName(s string) S3OptionFunc {
 	return func(o *S3Options) {
 		o.savedName = s
+	}
+}
+
+func WithAutoUnGzip(autoUnGzip bool) S3OptionFunc {
+	return func(o *S3Options) {
+		o.autoUnGzip = autoUnGzip
 	}
 }

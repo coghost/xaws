@@ -60,7 +60,7 @@ func newConfigWithSecret(raw string) (aws.Config, error) {
 		return cfg, err
 	}
 
-	cfg, err = NewAwsConfig(auth.AwsAccessKeyId, auth.AwsSecretAccessKey, "")
+	cfg, err = NewAwsConfig(auth.AwsAccessKeyID, auth.AwsSecretAccessKey, "")
 	if err != nil {
 		panic(err)
 	}

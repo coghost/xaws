@@ -119,7 +119,7 @@ func (s *DyanmodbWrapperSuite) Test_05_query() {
 	}
 }
 
-func buildExpr(name string) (expression.Expression, error) {
+func buildExpr(_ string) (expression.Expression, error) {
 	filtEx := expression.Name("year").GreaterThan(expression.Value(2010))
 	projEx := expression.NamesList(expression.Name("year"), expression.Name("title"))
 	expr, err := expression.NewBuilder().WithFilter(filtEx).WithProjection(projEx).Build()

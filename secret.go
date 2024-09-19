@@ -11,7 +11,7 @@ import (
 )
 
 type Auth struct {
-	AwsAccessKeyId     string `json:"aws_access_key_id"`
+	AwsAccessKeyID     string `json:"aws_access_key_id"`
 	AwsSecretAccessKey string `json:"aws_secret_access_key"`
 }
 
