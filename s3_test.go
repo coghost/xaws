@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/joho/godotenv"
 	"github.com/k0kubun/pp/v3"
 	"github.com/stretchr/testify/suite"
@@ -25,7 +26,9 @@ func TestS3(t *testing.T) {
 }
 
 func (s *S3Suite) SetupSuite() {
-	err := godotenv.Load()
+	envFile := ".minio.env"
+
+	err := godotenv.Load(envFile)
 	s.Require().Nil(err, "Error loading .env file: %v", err)
 
 	s.testBucket = os.Getenv("TEST_S3_BUCKET")
@@ -34,24 +37,30 @@ func (s *S3Suite) SetupSuite() {
 	accessKeyID := os.Getenv("AWS_ACCESS_KEY_ID")
 	secretAccessKey := os.Getenv("AWS_SECRET_ACCESS_KEY")
 	region := os.Getenv("AWS_REGION")
+	endpoint := os.Getenv("AWS_ENDPOINT")
 
 	s.Require().NotEmpty(accessKeyID, "AWS_ACCESS_KEY_ID environment variable is not set")
 	s.Require().NotEmpty(secretAccessKey, "AWS_SECRET_ACCESS_KEY environment variable is not set")
+	s.Require().NotEmpty(region, "AWS_REGION environment variable is not set")
 
-	if region == "" {
-		region = "us-west-2"
+	var cfg aws.Config
+
+	if envFile == ".minio.env" {
+		s3Client := NewMinioS3Client(endpoint, accessKeyID, secretAccessKey, region)
+		s.wrapper = NewS3WrapperWithClient(s.testBucket, s3Client)
+	} else {
+		cfg, err = NewAwsConfig(accessKeyID, secretAccessKey, region)
+		s.wrapper = NewS3Wrapper(s.testBucket, cfg)
 	}
 
-	cfg, err := NewAwsConfig(accessKeyID, secretAccessKey, region)
 	s.Require().Nil(err, "Failed to create AWS config: %v", err)
 
-	s.wrapper = NewS3Wrapper(s.testBucket, cfg)
 	s.testPrefix = "tests/"
 }
 
 func (s *S3Suite) TearDownSuite() {
 	// List all objects under the test prefix
-	objects, err := s.wrapper.ListObjects(s.testPrefix)
+	objects, err := s.wrapper.ListObjects(s.testPrefix, WithEmptyFile(true))
 	if err != nil {
 		s.T().Logf("Failed to list objects for cleanup: %v", err)
 		return
@@ -71,7 +80,7 @@ func (s *S3Suite) TearDownSuite() {
 	wg.Wait()
 
 	// Verify that all objects have been deleted
-	remainingObjects, err := s.wrapper.ListObjects(s.testPrefix)
+	remainingObjects, err := s.wrapper.ListObjects(s.testPrefix, WithEmptyFile(true))
 	if err != nil {
 		s.T().Logf("Failed to verify cleanup: %v", err)
 	} else if len(remainingObjects) > 0 {
@@ -81,7 +90,7 @@ func (s *S3Suite) TearDownSuite() {
 
 func (s *S3Suite) TearDownTest() {
 	testPrefix := fmt.Sprintf("%s%s/", s.testPrefix, s.T().Name())
-	objects, err := s.wrapper.ListObjects(testPrefix)
+	objects, err := s.wrapper.ListObjects(testPrefix, WithEmptyFile(true))
 	if err != nil {
 		s.T().Logf("Failed to list objects for test cleanup: %v", err)
 		return
@@ -96,7 +105,7 @@ func (s *S3Suite) TearDownTest() {
 }
 
 func (s *S3Suite) TestUploadAndGetObject() {
-	s.T().Parallel()
+	// s.T().Parallel()
 	testObject := fmt.Sprintf("%stest-object-%s.txt", s.testPrefix, s.T().Name())
 	testContent := []byte("This is a test content for S3 integration test.")
 
@@ -162,6 +171,7 @@ func (s *S3Suite) TestListBuckets() {
 	buckets, err := s.wrapper.ListBuckets()
 	s.Nil(err, "Failed to list buckets")
 	s.NotEmpty(buckets.Buckets, "No buckets found")
+	pp.Println(buckets.Buckets)
 }
 
 func (s *S3Suite) TestUploadToBucketWithAutoGzipped() {
@@ -308,7 +318,7 @@ func (s *S3Suite) TestUploadRawDataToGz() {
 	err := s.wrapper.UploadRawDataToGz(testContent, testObject)
 	s.Nil(err, "Failed to upload raw data to gzip")
 
-	retrievedContent, err := s.wrapper.GetObject(testObject)
+	retrievedContent, err := s.wrapper.GetObject(testObject, WithAutoUnGzip(true))
 	s.Nil(err, "Failed to get gzipped object")
 	s.Equal([]byte(testContent), retrievedContent, "Retrieved content doesn't match uploaded content")
 }
@@ -326,7 +336,7 @@ func (s *S3Suite) TestListObjectsWithOptions() {
 	// Test with maxKeys option
 	objects, err := s.wrapper.ListObjects(testPrefix, WithMaxKeys(2))
 	s.Nil(err, "Failed to list objects with maxKeys")
-	s.Equal(2, len(objects), "Should list exactly 2 objects")
+	s.Len(objects, 2, "Should list exactly 2 objects")
 
 	// Test with withEmptyFile option
 	emptyObject := testPrefix + "empty.txt"
@@ -339,9 +349,7 @@ func (s *S3Suite) TestListObjectsWithOptions() {
 }
 
 func (s *S3Suite) TestDeleteObj() {
-	s3uri := "s3://crunchbase-data-sync-bucket/news-activities/data/metadata.json"
-	err := s.wrapper.DeleteObject(s3uri)
-	// objects, err := s.wrapper.ListObjects(s.testPrefix)
+	objects, err := s.wrapper.ListObjects(s.testPrefix, WithEmptyFile(true))
 	s.Nil(err)
-	// pp.Println(objects)
+	pp.Println(len(objects))
 }

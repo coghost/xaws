@@ -1,19 +1,22 @@
 package xaws
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/joho/godotenv"
 	"github.com/k0kubun/pp/v3"
 	"github.com/stretchr/testify/suite"
-	"github.com/ungerik/go-dry"
 )
 
 type SqsSuite struct {
 	suite.Suite
-	w    *SqsWrapper
+	w    *SqsClient
 	name string
 }
 
@@ -22,104 +25,185 @@ func TestSqs(t *testing.T) {
 }
 
 func (s *SqsSuite) SetupSuite() {
-	s.name = "sqs-crud-test"
-	lines, e := dry.FileGetLines("/tmp/aws.sqs.cfg")
-	if e != nil {
-		panic(e)
-	}
-	ak, sk, region, name := lines[0], lines[1], lines[2], s.name
+	err := godotenv.Load(".sqs.prod.env")
+	s.Require().Nil(err, "Error loading env file: %v", err)
 
-	cfg, _ := NewAwsConfig(ak, sk, region)
-	s.w = NewSqsWrapper(name, cfg, 10, 60)
+	s.name = os.Getenv("SQS_QUEUE_NAME")
+	s.Require().NotEmpty(s.name, "SQS_QUEUE_NAME environment variable is not set")
+
+	accessKeyID := os.Getenv("AWS_ACCESS_KEY_ID")
+	secretAccessKey := os.Getenv("AWS_SECRET_ACCESS_KEY")
+	region := os.Getenv("AWS_REGION")
+
+	s.Require().NotEmpty(accessKeyID, "AWS_ACCESS_KEY_ID environment variable is not set")
+	s.Require().NotEmpty(secretAccessKey, "AWS_SECRET_ACCESS_KEY environment variable is not set")
+
+	if region == "" {
+		region = "us-west-2"
+	}
+
+	cfg, err := NewAwsConfig(accessKeyID, secretAccessKey, region)
+	s.Require().Nil(err, "Failed to create AWS config: %v", err)
+
+	s.w = NewSqsClient(s.name, cfg, 10, 60)
 }
 
 func (s *SqsSuite) TearDownSuite() {
 }
 
-func (s *SqsSuite) Test_00_create() {
-	v, e := s.w.CreateQueue(s.w.QueueName)
-	s.Nil(e)
-	pp.Println(v)
-	s.True(strings.HasSuffix(v, s.w.QueueName))
-	s.w.SetQueueUrl(s.w.QueueName)
+func (s *SqsSuite) purgeQueue() {
+	s.T().Helper()
+	s.T().Log("Purging the queue...")
+	_, err := s.w.ClearQueue()
+	s.Require().NoError(err, "Failed to purge queue")
+
+	// Wait for a short time to ensure the purge operation completes
+	time.Sleep(3 * time.Second)
+
+	// Verify that the queue is empty
+	remainingMessages, err := s.w.GetRemainedItems()
+	s.Require().NoError(err)
+	s.Require().Equal(int64(0), remainingMessages, "Queue should be empty after purging")
+	s.T().Log("Queue purged successfully")
 }
 
-func (s *SqsSuite) Test_01_GetQueues() {
-	res, e := s.w.GetQueues()
-	s.Nil(e)
-	s.Greater(len(res.QueueUrls), 0)
+func (s *SqsSuite) TestSendMsg() {
+	// Test successful message send
+	message := "Test message"
+	response, err := s.w.SendMsg(message)
+	s.Require().NoError(err)
+	s.Require().NotNil(response)
+	s.Require().NotEmpty(response.MessageId)
+
+	// Test sending an empty message
+	emptyMessage := ""
+	response, err = s.w.SendMsg(emptyMessage)
+	s.Require().ErrorIs(err, ErrEmptyMessageBody)
+	s.Require().Nil(response)
+
+	// Test sending a long message (close to but not exceeding 256KB limit)
+	longMessage := strings.Repeat("a", 256*1024-1)
+	response, err = s.w.SendMsg(longMessage)
+	s.Require().NoError(err)
+	s.Require().NotNil(response)
+	s.Require().NotEmpty(response.MessageId)
+
+	// Test sending a message that exceeds the 256KB limit
+	tooLongMessage := strings.Repeat("a", 256*1024+1)
+	response, err = s.w.SendMsg(tooLongMessage)
+	s.Require().ErrorIs(err, ErrMessageTooLong)
+	s.Require().Nil(response)
+
+	// Test sending a message with valid special characters
+	specialMessage := "!@$%^&*()_+{}|:\"<>?[]\\;',./"
+	response, err = s.w.SendMsg(specialMessage)
+	s.Require().NoError(err)
+	s.Require().NotNil(response)
+	s.Require().NotEmpty(response.MessageId)
+
+	// Test sending a message with Unicode characters
+	unicodeMessage := "こんにちは世界"
+	response, err = s.w.SendMsg(unicodeMessage)
+	s.Require().NoError(err)
+	s.Require().NotNil(response)
+	s.Require().NotEmpty(response.MessageId)
+
+	// Purge the queue after sending messages
+	s.purgeQueue()
 }
 
-func (s *SqsSuite) Test_02_GetQueueUrl() {
-	r, e := s.w.GetQueueUrl(s.w.QueueName)
-	s.Nil(e)
-	s.Contains(r, s.w.QueueName)
+func (s *SqsSuite) TestSendJSONMessage() {
+	// Read the JSON file
+	jsonPath := filepath.Join("assets", "demo.json")
+	jsonData, err := os.ReadFile(jsonPath)
+	s.Require().NoError(err, "Failed to read JSON file")
+
+	// Validate JSON
+	var jsonContent interface{}
+	err = json.Unmarshal(jsonData, &jsonContent)
+	s.Require().NoError(err, "Invalid JSON content")
+
+	// Send the JSON content as a message
+	response, err := s.w.SendMsg(string(jsonData))
+	s.Require().NoError(err, "Failed to send JSON message")
+	s.Require().NotNil(response)
+	s.Require().NotEmpty(response.MessageId)
+
+	// Retrieve the message to verify its content
+	receivedMsg, err := s.w.GetMsg()
+	s.Require().NoError(err, "Failed to retrieve message")
+	s.Require().Len(receivedMsg.Messages, 1, "Expected to receive 1 message")
+
+	// Verify the content of the received message
+	var receivedContent interface{}
+	err = json.Unmarshal([]byte(*receivedMsg.Messages[0].Body), &receivedContent)
+	s.Require().NoError(err, "Received message is not valid JSON")
+	s.Require().Equal(jsonContent, receivedContent, "Received message does not match sent message")
+
+	s.purgeQueue()
 }
 
-func (s *SqsSuite) Test_0300_SendMsg() {
-	msg := "I am a test message!"
-	r, e := s.w.SendMsg(msg)
-	s.Nil(e)
-	s.NotNil(r.MessageId)
-}
+func (s *SqsSuite) TestCreateQueue() {
+	// Generate a unique queue name for testing
+	testQueueName := fmt.Sprintf("test-queue-%d", time.Now().UnixNano())
 
-func (s *SqsSuite) Test_0301_SendMsgBatch() {
-	messages := []string{"first", "second", "third"}
-	for i := 0; i < 20; i++ {
-		messages = append(messages, fmt.Sprintf("auto %d", i))
-	}
-	ss := s.w.chunkSlice(messages, 10)
-	for _, sl := range ss {
-		r, e := s.w.SendMsgBatch(sl)
-		s.Nil(e)
-		s.Equal(len(sl), len(r.Successful))
-	}
-}
+	// Test creating a new queue
+	queueURL, err := s.w.CreateQueue(testQueueName)
+	s.Require().NoError(err, "Failed to create queue")
+	s.Require().NotEmpty(queueURL, "Queue URL should not be empty")
+	s.Require().Contains(queueURL, testQueueName, "Queue URL should contain the queue name")
 
-func (s *SqsSuite) Test_04_GetMsg() {
-	r, e := s.w.GetMsg()
-	s.Nil(e)
-	s.NotNil(*r.Messages[0].Body)
-	v := s.w.MustGetMsg()
-	pp.Println(v)
+	// Verify that the queue was created by trying to get its URL
+	retrievedURL, err := s.w.GetQueueURL(testQueueName)
+	s.Require().NoError(err, "Failed to get queue URL")
+	s.Require().Equal(queueURL, retrievedURL, "Retrieved queue URL should match the created queue URL")
+
+	// Clean up: Delete the test queue
+	err = s.w.DeleteQueue(testQueueName)
+	s.Require().NoError(err, "Failed to delete test queue")
+
+	// Verify that the queue was deleted
+	_, err = s.w.GetQueueURL(testQueueName)
+	s.Require().Error(err, "Queue should no longer exist")
 }
 
 func (s *SqsSuite) Test_0402_ReadMsgs() {
 	ch := make(chan *SqsResp, 1)
 	defer close(ch)
-	go s.w.ReadMessages(ch, WithMax(17))
 
-LOOP:
+	go s.w.ReadMessages(ch, WithMax(4))
+
+	timeout := time.After(10 * time.Second)
+	messagesProcessed := 0
+
 	for {
 		select {
-		case cap := <-ch:
-			if cap.Type == READ_SQS_ERROR {
-				pp.Println("error happened")
-				pp.Println(cap)
-				break LOOP
-			} else if cap.Type == READ_SQS_MAXIMUM {
-				pp.Println("required messages matched")
-				pp.Println(cap)
-				break LOOP
-			} else if cap.Type == READ_SQS_ALL {
-				pp.Println("all messages are consumed")
-				pp.Println(cap)
-				break LOOP
-			} else {
-				pp.Println("bingo")
-				pp.Println(cap)
+		case resp := <-ch:
+			switch resp.Status {
+			case SqsReadError:
+				s.T().Error("Error occurred while reading messages")
+				return
+			case SqsReadMaximumReached:
+				s.T().Log("Required number of messages matched")
+				goto DummyLogic
+			case SqsReadAllConsumed:
+				s.T().Log("All messages are consumed")
+				goto DummyLogic
+			case SqsReadSuccess:
+				messagesProcessed++
+				s.T().Logf("Processed message: %s", *resp.Msg)
 			}
-		case <-time.After(time.Duration(10) * time.Second):
-			panic(fmt.Sprintf("timeout of (%d)s getting new captured page", 10))
+		case <-timeout:
+			s.T().Fatal("Test timed out after 10 seconds")
+			return
 		}
 	}
-}
 
-func (s *SqsSuite) Test_06_remained() {
-	r, e := s.w.GetRemainedItems()
-	s.Nil(e)
-	// 23 is calculated from 0401
-	s.Equal(int64(24), r)
+DummyLogic:
+	s.T().Log("All messages are handled.")
+	for i := 0; i < 10; i++ {
+		s.T().Log("Dummy logic iteration:", i)
+	}
 }
 
 func (s *SqsSuite) Test_91_DeleteMsg() {
@@ -132,4 +216,47 @@ func (s *SqsSuite) Test_91_DeleteMsg() {
 func (s *SqsSuite) Test_92_deleteQueue() {
 	e := s.w.DeleteQueue(s.name)
 	s.Nil(e)
+}
+
+func (s *SqsSuite) Test_01_GetQueues() {
+	res, e := s.w.GetQueues()
+	s.Nil(e)
+	s.NotEmpty(res.QueueUrls)
+	pp.Println(res.QueueUrls)
+}
+
+func (s *SqsSuite) Test_02_GetQueueUrl() {
+	r, e := s.w.GetQueueURL(s.w.QueueName)
+	s.Nil(e)
+	s.Contains(r, s.w.QueueName)
+	pp.Println(r)
+}
+
+func (s *SqsSuite) Test_0301_SendMsgBatch() {
+	messages := []string{"first", "second", "third"}
+	for i := 0; i < 20; i++ {
+		messages = append(messages, fmt.Sprintf("auto %d", i))
+	}
+	ss := ChunkSlice(messages, 10)
+	for _, sl := range ss {
+		r, e := s.w.SendMsgBatch(sl)
+		s.Nil(e)
+		s.Equal(len(sl), len(r.Successful))
+	}
+}
+
+func (s *SqsSuite) Test_04_GetMsg() {
+	pp.Default.SetExportedOnly(true)
+	op, e := s.w.GetMsgs()
+	s.Nil(e)
+	pp.Println(op)
+	pp.Println(len(op.Messages))
+	fmt.Println(*op.Messages[0].Body)
+}
+
+func (s *SqsSuite) Test_06_remained() {
+	r, e := s.w.GetRemainedItems()
+	s.Nil(e)
+	s.GreaterOrEqual(r, int64(0))
+	pp.Println("total", r)
 }

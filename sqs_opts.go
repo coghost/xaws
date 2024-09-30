@@ -1,12 +1,12 @@
 package xaws
 
 type SqsOpts struct {
-	batch int
-	max   int
+	batchSize int
+	max       int
 
 	queueName string
 
-	receiveTimeSeconds int
+	waitTimeSeconds int
 }
 
 type SqsOptFunc func(o *SqsOpts)
@@ -17,9 +17,9 @@ func bindSqsOpts(opt *SqsOpts, opts ...SqsOptFunc) {
 	}
 }
 
-func WithReceiveTimeSeconds(i int) SqsOptFunc {
+func WaitTimeSeconds(i int) SqsOptFunc {
 	return func(o *SqsOpts) {
-		o.receiveTimeSeconds = i
+		o.waitTimeSeconds = i
 	}
 }
 
@@ -29,9 +29,9 @@ func WithMax(i int) SqsOptFunc {
 	}
 }
 
-func WithBatch(i int) SqsOptFunc {
+func BatchSize(i int) SqsOptFunc {
 	return func(o *SqsOpts) {
-		o.batch = i
+		o.batchSize = i
 	}
 }
 

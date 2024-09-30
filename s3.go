@@ -15,6 +15,7 @@ import (
 	"github.com/avast/retry-go"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
@@ -25,10 +26,8 @@ import (
 )
 
 const (
-	_defaultTimeoutSecs = 60
-	_defaultBatchSize   = 10
-	_retryTimes         = 3
-	_defaultSaveTo      = "/tmp"
+	_retryTimes    = 3
+	_defaultSaveTo = "/tmp"
 )
 
 const (
@@ -62,6 +61,19 @@ func NewS3Wrapper(bucket string, cfg aws.Config, opts ...S3OptionFunc) *S3Client
 	}
 }
 
+func NewS3WrapperWithClient(bucket string, client *s3.Client, opts ...S3OptionFunc) *S3Client {
+	opt := &S3Options{timeout: _defaultTimeoutSecs, saveTo: _defaultSaveTo}
+	bindS3Options(opt, opts...)
+
+	return &S3Client{
+		Client: client,
+		Bucket: bucket,
+		// timeout
+		Timeout: opt.timeout,
+		SaveTo:  opt.saveTo,
+	}
+}
+
 func MustNewS3WrapperWithDefaultConfig(bucket string, opts ...S3OptionFunc) *S3Client {
 	w, err := NewS3WrapperWithDefaultConfig(bucket, opts...)
 	if err != nil {
@@ -81,8 +93,7 @@ func NewS3WrapperWithDefaultConfig(bucket string, opts ...S3OptionFunc) (*S3Clie
 }
 
 func (w *S3Client) ListBuckets() (*s3.ListBucketsOutput, error) {
-	client := s3.NewFromConfig(w.Config)
-	return client.ListBuckets(context.TODO(), nil)
+	return w.Client.ListBuckets(context.TODO(), nil)
 }
 
 func (w *S3Client) UploadToBucketWithAutoGzipped(localFile, s3path, bucket string) (*manager.UploadOutput, error) {
@@ -210,10 +221,9 @@ func (w *S3Client) GetObject(objectKey string, opts ...S3OptionFunc) ([]byte, er
 			// Successfully created gzip reader, try to uncompress
 			defer reader.Close()
 
-			uncompressed, err := io.ReadAll(reader)
+			decompressed, err := io.ReadAll(reader)
 			if err == nil {
-				// Successfully uncompressed
-				return uncompressed, nil
+				return decompressed, nil
 			}
 
 			// If uncompression fails, log a warning
@@ -513,4 +523,14 @@ func (w *S3Client) ListObjects(prefix string, opts ...S3OptionFunc) ([]string, e
 	}
 
 	return found, nil
+}
+
+func NewMinioS3Client(endpoint, accessKeyID, secretAccessKey, region string) *s3.Client {
+	return s3.NewFromConfig(aws.Config{
+		Region: region,
+	}, func(o *s3.Options) {
+		o.BaseEndpoint = aws.String(endpoint)
+		o.Credentials = credentials.NewStaticCredentialsProvider(accessKeyID, secretAccessKey, "")
+		o.UsePathStyle = true // This is often needed for MinIO
+	})
 }

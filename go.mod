@@ -5,7 +5,7 @@ go 1.21
 require (
 	github.com/avast/retry-go v3.0.0+incompatible
 	github.com/aws/aws-sdk-go v1.47.11
-	github.com/aws/aws-sdk-go-v2 v1.25.0
+	github.com/aws/aws-sdk-go-v2 v1.31.0
 	github.com/aws/aws-sdk-go-v2/config v1.26.3
 	github.com/aws/aws-sdk-go-v2/credentials v1.16.14
 	github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue v1.12.14
@@ -18,7 +18,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/scheduler v1.6.6
 	github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.27.1
 	github.com/aws/aws-sdk-go-v2/service/sqs v1.29.7
-	github.com/aws/smithy-go v1.20.0
+	github.com/aws/smithy-go v1.21.0
 	github.com/coghost/xpretty v0.0.0-20240109082848-b154112aa0aa
 	github.com/gookit/goutil v0.6.16
 	github.com/joho/godotenv v1.5.1

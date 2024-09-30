@@ -8,6 +8,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 )
 
+const (
+	_defaultTimeoutSecs = 60
+)
+
 func NewAwsConfig(ak, sk, region string) (aws.Config, error) {
 	ctx := context.TODO()
 	prov := credentials.StaticCredentialsProvider{
