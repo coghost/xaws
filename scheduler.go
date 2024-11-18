@@ -48,22 +48,23 @@ func (w *SchedulerWrapper) ListSchedulers(name string) (*scheduler.ListSchedules
 
 // Upsert create or update a scheduler.
 func (w *SchedulerWrapper) Upsert(name string, schedule, targetArn, roleArn, jsonStr string) error {
-	op, err := w.ListSchedulers(name)
+	output, err := w.ListSchedulers(name)
 	if err != nil {
 		return err
 	}
 
 	msg := "created"
 
-	if len(op.Schedules) == 0 {
-		w.Create(name, schedule, targetArn, roleArn, jsonStr)
+	if len(output.Schedules) == 0 {
+		err = w.Create(name, schedule, targetArn, roleArn, jsonStr)
 	} else {
 		msg = "updated"
-		w.Update(name, schedule, targetArn, roleArn, jsonStr)
+		err = w.Update(name, schedule, targetArn, roleArn, jsonStr)
 	}
 
 	log.Info().Str("name", name).Str("target", targetArn).Str("schedule", schedule).Msg(msg)
-	return nil
+
+	return err
 }
 
 // Create create a scheduler.

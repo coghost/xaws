@@ -49,14 +49,14 @@ func NewFunctionWrapperWithDefaultConfig(funcName string, dryRun bool) (*Functio
 
 // GetConfig gets data about function.
 func (w *FunctionWrapper) GetConfig() (*types.FunctionConfiguration, error) {
-	op, err := w.client.GetFunction(context.TODO(), &lambda.GetFunctionInput{
+	output, err := w.client.GetFunction(context.TODO(), &lambda.GetFunctionInput{
 		FunctionName: aws.String(w.funcName),
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	return op.Configuration, nil
+	return output.Configuration, nil
 }
 
 // List lists up to maxItems for account.
@@ -133,22 +133,28 @@ func (w *FunctionWrapper) PrintInvokeOutput(output *lambda.InvokeOutput) {
 		log.Error().Err(err).Msg("cannot decode log result.")
 	}
 
-	xpretty.CyanPrintf("%[1]s >Lambda Output< %[1]s\n", strings.Repeat("=", 32))
+	const (
+		hintlen = 32
+	)
+
+	xpretty.CyanPrintf("%[1]s >Lambda Output< %[1]s\n", strings.Repeat("=", hintlen))
 	xpretty.CyanPrintf("%s\n", raw)
 
 	if len(output.Payload) > 0 {
-		xpretty.CyanPrintf("%[1]s >Payload Output< %[1]s\n", strings.Repeat("-", 32))
+		xpretty.CyanPrintf("%[1]s >Payload Output< %[1]s\n", strings.Repeat("-", hintlen))
 		xpretty.CyanPrintf("%s\n", output.Payload)
 	}
 
-	xpretty.CyanPrintf("%[1]s >Lambda Output< %[1]s\n", strings.Repeat("=", 32))
+	xpretty.CyanPrintf("%[1]s >Lambda Output< %[1]s\n", strings.Repeat("=", hintlen))
 }
 
 // doDryRun only prints the func name and its command.
 func (w *FunctionWrapper) doDryRun(name, cmd string) {
-	xpretty.CyanPrintf("%[1]s >Dry Run< %[1]s\n", strings.Repeat("=", 32))
+	const hintlen = 32
+
+	xpretty.CyanPrintf("%[1]s >Dry Run< %[1]s\n", strings.Repeat("=", hintlen))
 	xpretty.YellowPrintf("[%s]: %s\n", name, cmd)
-	xpretty.CyanPrintf("%[1]s >Dry Run< %[1]s\n", strings.Repeat("=", 32))
+	xpretty.CyanPrintf("%[1]s >Dry Run< %[1]s\n", strings.Repeat("=", hintlen))
 }
 
 const (

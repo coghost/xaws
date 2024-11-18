@@ -53,7 +53,7 @@ func (s *DyanmodbWrapperSuite) Test_00_exist() {
 func (s *DyanmodbWrapperSuite) Test_01_listTables() {
 	tbs, e := s.w.ListTables()
 
-	s.Greater(len(tbs), 0)
+	s.NotEmpty(tbs)
 	s.Nil(e)
 }
 

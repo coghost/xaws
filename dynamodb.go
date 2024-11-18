@@ -172,13 +172,13 @@ func (w *DynamodbWrapper) AddItemBatch(data []types.WriteRequest) (int, error) {
 		}
 
 		wrArr = data[start:end]
+
 		_, err = w.Client.BatchWriteItem(
 			w.DdbCtx,
 			&dynamodb.BatchWriteItemInput{
 				RequestItems: map[string][]types.WriteRequest{w.TableName: wrArr},
 			},
 		)
-
 		if err != nil {
 			return 0, err
 		}

@@ -75,13 +75,13 @@ func (w *EventWrapper) ListTargets(name string) {
 }
 
 // PutTarget put target to a rule.
-func (w *EventWrapper) PutTarget(name string, targetArn, targetId, jsonStr string) {
+func (w *EventWrapper) PutTarget(name string, targetArn, targetID, jsonStr string) {
 	output, err := w.client.PutTargets(context.TODO(), &eventbridge.PutTargetsInput{
 		Rule: aws.String(name),
 		Targets: []types.Target{
 			{
 				Arn: aws.String(targetArn),
-				Id:  aws.String(targetId),
+				Id:  aws.String(targetID),
 				// RoleArn: aws.String(roleArn),
 				Input: aws.String(jsonStr),
 			},
