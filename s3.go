@@ -534,3 +534,60 @@ func NewMinioS3Client(endpoint, accessKeyID, secretAccessKey, region string) *s3
 		o.UsePathStyle = true // This is often needed for MinIO
 	})
 }
+
+// ListObjectFolder list only the sublevel "folders" (CommonPrefixes) instead of files
+func (w *S3Client) ListObjectFolders(ctx context.Context, prefix string, sublevel int) ([]string, error) {
+	// 1. Normalize prefix: must end with / to treat it as a "folder"
+	searchPrefix := prefix
+	if searchPrefix != "" && !strings.HasSuffix(searchPrefix, "/") {
+		searchPrefix += "/"
+	}
+
+	// We start with our initial prefix
+	currentPrefixes := []string{searchPrefix}
+
+	// 2. Iterate down the hierarchy until we reach the desired sublevel
+	for range sublevel {
+		var nextLevelPrefixes []string
+
+		for _, p := range currentPrefixes {
+			// Use Delimiter to get "folders" (CommonPrefixes) instead of files
+			paginator := s3.NewListObjectsV2Paginator(w.Client, &s3.ListObjectsV2Input{
+				Bucket:    aws.String(w.Bucket),
+				Prefix:    aws.String(p),
+				Delimiter: aws.String("/"),
+			})
+
+			for paginator.HasMorePages() {
+				page, err := paginator.NextPage(ctx)
+				if err != nil {
+					return nil, err
+				}
+
+				// CommonPrefixes contains the next level of "folders"
+				for _, cp := range page.CommonPrefixes {
+					nextLevelPrefixes = append(nextLevelPrefixes, *cp.Prefix)
+				}
+			}
+		}
+
+		// Move to the next depth
+		currentPrefixes = nextLevelPrefixes
+
+		// If we found nothing at this level, we can't go deeper
+		if len(currentPrefixes) == 0 {
+			break
+		}
+	}
+
+	// 3. Clean up results
+	// Example: transforms "a/b/c/" into "c"
+	results := make([]string, 0, len(currentPrefixes))
+	for _, p := range currentPrefixes {
+		trimmed := strings.TrimSuffix(p, "/")
+		parts := strings.Split(trimmed, "/")
+		results = append(results, parts[len(parts)-1])
+	}
+
+	return results, nil
+}
